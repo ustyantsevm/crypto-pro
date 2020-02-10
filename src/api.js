@@ -472,6 +472,101 @@ function signData(hash, dataBase64, signType) {
 }
 
 /**
+ * Создает подпись по hash'у файла и hash'у сертификата (открепленная подпись)
+ *
+ * @param {String} certHash -- fingerprint (thumbprint) сертификата
+ * @param {String} hashValue -- строковые данные
+ * @param {Boolean} hashAlgOid -- алгоритм, которым сформирован hash файла
+ * @returns {Promise} -- обещание, которое зарезолвится с данными о подписи {String}
+ * */
+function signHash(certHash, hashValue, hashAlgOid) {
+
+    return new Promise(function (resolve, reject) {
+        getCadesCert(certHash).then(function (cert) {
+            eval(cryptoCommon.generateAsyncFn(function signData() {
+                var clientTime = new Date(),
+                    oAttrs,
+                    oSignedData,
+                    oSigner,
+                    attrs,
+                    signature,
+                    oHashedData;
+
+                try {
+                    oAttrs = 'yield' + cryptoCommon.createObj('CADESCOM.CPAttribute');
+                    oSignedData = 'yield' + cryptoCommon.createObj('CAdESCOM.CadesSignedData');
+                    oSigner = 'yield' + cryptoCommon.createObj('CAdESCOM.CPSigner');
+                    oHashedData = 'yield' + cryptoCommon.createObj("CAdESCOM.HashedData");
+                } catch (error) {
+                    reject('Ошибка при инициализации подписи: ' + err.message);
+                    return;
+                }
+
+                clientTime = cryptoCommon.getDateObj(clientTime);
+
+                try {
+                    void('yield' + oAttrs.propset_Name(cryptoConstants.Time.AUTHENTICATED_ATTRIBUTE_SIGNING_TIME));
+                    void('yield' + oAttrs.propset_Value(clientTime));
+                } catch (err) {
+                    reject('Ошибка при установке данных подписи: ' + err.message);
+                    return;
+                }
+
+                // Задаем настройки для подписи
+                try {
+                    void('yield' + oSigner.propset_Certificate(cert));
+                    attrs = 'yield' + oSigner.AuthenticatedAttributes2;
+                    void('yield' + attrs.Add(oAttrs));
+                    void('yield' + oSignedData.propset_ContentEncoding(cadesplugin.CADESCOM_BASE64_TO_BINARY));
+                    void('yield' + oSignedData.propset_DisplayData(1));
+                    void('yield' + oSigner.propset_Options(cadesplugin.CAPICOM_CERTIFICATE_INCLUDE_WHOLE_CHAIN));
+
+                    void('yield' + oHashedData.propset_Algorithm(hashAlgOid));
+                    void('yield' + oHashedData.propset_DataEncoding(cadesplugin.CADESCOM_BASE64_TO_BINARY));
+                    void('yield' + oHashedData.SetHashValue(hashValue));
+                } catch (err) {
+                    reject('Не удалось установить настройки для подписи: ' + err.message);
+                    return;
+                }
+
+                try {
+                    signature = 'yield' + oSignedData.SignHash(
+                        oHashedData,
+                        oSigner,
+                        cadesplugin.CADESCOM_CADES_BES
+                    );
+                } catch (err) {
+                    reject('Не удалось создать подпись: ' + err.message);
+                    return;
+                }
+
+                resolve(signature);
+            }));
+        }, reject);
+    });
+}
+
+/**
+ * Определение алгоритма хэширования. Работает как по алгоритму публичного ключа, так и по алгоритму хеширования
+ *
+ * @param {String} algOid -- fingerprint (thumbprint) сертификата
+ * @returns {Promise} -- обещание, которое зарезолвится с данными об алгоритме хэширования {Int}
+ * */
+function getHashAlgByOid(algOid) {
+
+    return new Promise(function (resolve, reject) {
+        if (algOid === '1.2.643.2.2.9' || algOid === '1.2.643.2.2.19')
+            resolve(cadesplugin.CADESCOM_HASH_ALGORITHM_CP_GOST_3411);
+        if (algOid === '1.2.643.7.1.1.2.2' || algOid === '1.2.643.7.1.1.1.1')
+            resolve(cadesplugin.CADESCOM_HASH_ALGORITHM_CP_GOST_3411_2012_256);
+        if (algOid === '1.2.643.7.1.1.2.3' || algOid === '1.2.643.7.1.1.1.2')
+            resolve(cadesplugin.CADESCOM_HASH_ALGORITHM_CP_GOST_3411_2012_512);
+
+        reject('Не удалось определить алгоритм хэширования для ' + algOid);
+    });
+}
+
+/**
  * Создает подпись XML строки по hash'у сертификата
  *
  * @param {String} hash -- fingerprint (thumbprint) сертификата
@@ -579,6 +674,8 @@ module.exports = {
     getCertsList: getCertsList,
     getCert: getCert,
     signData: signData,
+    signHash: signHash,
+    getHashAlgByOid: getHashAlgByOid,
     signDataXML: signDataXML,
     getSystemInfo: getSystemInfo,
     isValidCSPVersion: isValidCSPVersion,
